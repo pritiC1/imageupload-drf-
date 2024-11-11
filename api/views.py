@@ -25,7 +25,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from .models import OTP, CustomUser
-
+from .models import Cart
 
 
 logger = logging.getLogger(__name__)
@@ -367,3 +367,60 @@ class ProductListView(APIView):
         except Exception as e:
             logger.error(f"Error retrieving products: {str(e)}")
             return Response({"error": "Failed to retrieve products."}, status=status.HTTP_400_BAD_REQUEST)
+        
+class AddToCartView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        product_id = request.data.get("product_id")
+        quantity = request.data.get("quantity", 1)
+
+        # Basic data validation
+        if not product_id or not isinstance(quantity, int) or quantity <= 0:
+            return Response({"error": "Invalid data"}, status=status.HTTP_400_BAD_REQUEST)
+
+        product = get_object_or_404(Product, id=product_id)
+        
+        # Retrieve or create the user's cart
+        cart, created = Cart.objects.get_or_create(user=request.user)
+
+        # Add the product to the cart
+        cart.add_product(product_id=product.id, quantity=quantity)
+
+        return Response({
+            "message": "Product added to cart",
+            "cart": cart.products
+        }, status=status.HTTP_201_CREATED)
+
+
+class UpdateCartItemView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, product_id):
+        quantity = request.data.get("quantity")
+
+        # Basic data validation
+        if not isinstance(quantity, int) or quantity <= 0:
+            return Response({"error": "Invalid quantity"}, status=status.HTTP_400_BAD_REQUEST)
+
+        cart = get_object_or_404(Cart, user=request.user)
+
+        # Update the quantity of the product in the cart
+        cart.update_quantity(product_id=product_id, quantity=quantity)
+
+        return Response({
+            "message": "Cart item updated",
+            "cart": cart.products
+        }, status=status.HTTP_200_OK)
+
+
+class RemoveFromCartView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, product_id):
+        cart = get_object_or_404(Cart, user=request.user)
+
+        # Remove the product from the cart
+        cart.remove_product(product_id)
+
+        return Response({"message": "Product removed from cart"}, status=status.HTTP_204_NO_CONTENT)        

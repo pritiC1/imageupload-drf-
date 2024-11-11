@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, Group, Permission
 from django.conf import settings
+from django.contrib.auth.models import User
 
 
 class CustomUser(AbstractUser):
@@ -46,4 +47,35 @@ class Product(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
- 
+class Cart(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='cart')
+    products = models.JSONField(default=list)  # Store products as a list of dictionaries
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Cart of {self.user.username}"
+    
+    def add_product(self, product_id, quantity):
+        # Add or update product in the cart
+        for item in self.products:
+            if item['product_id'] == product_id:
+                item['quantity'] += quantity
+                self.save()
+                return
+        # If product doesn't exist in the cart, add new item
+        self.products.append({'product_id': product_id, 'quantity': quantity})
+        self.save()
+
+    def remove_product(self, product_id):
+        # Remove product from cart
+        self.products = [item for item in self.products if item['product_id'] != product_id]
+        self.save()
+
+    def update_quantity(self, product_id, quantity):
+        # Update the quantity of a product in the cart
+        for item in self.products:
+            if item['product_id'] == product_id:
+                item['quantity'] = quantity
+                self.save()
+                return

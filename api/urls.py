@@ -4,6 +4,7 @@ from .views import HomePage
 from rest_framework_simplejwt.views import TokenRefreshView, TokenObtainPairView
 from .views import ProductView
 from .views import ProductCreateView
+from .views import AddToCartView, UpdateCartItemView, RemoveFromCartView
 
 urlpatterns = [
     path('register/', RegisterView.as_view(), name='register'),
@@ -15,4 +16,7 @@ urlpatterns = [
     path('products/', ProductView.as_view(), name='product_list'),  # For GET (all products) and POST (create new product)
     path('products/<int:pk>/', ProductView.as_view(), name='product_detail'),  # For GET (single product), PUT (update), DELETE
     path('products/', ProductCreateView.as_view(), name='product-create'),
+    path("cart/add/", AddToCartView.as_view(), name="add-to-cart"),
+    path("cart/update/<int:product_id>/", UpdateCartItemView.as_view(), name="update-cart-item"),
+    path("cart/remove/<int:product_id>/", RemoveFromCartView.as_view(), name="remove-from-cart"),
 ]
