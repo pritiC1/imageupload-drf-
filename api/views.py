@@ -26,6 +26,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from .models import OTP, CustomUser
 from .models import Cart
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 
 logger = logging.getLogger(__name__)
@@ -294,7 +295,7 @@ class ProductCreateView(APIView):
         if not request.user or not request.user.is_authenticated:
             return Response({"error": "User must be authenticated."}, status=status.HTTP_401_UNAUTHORIZED)
 
-
+        image = request.FILES.get('image')
 
         # Create the product in the database
         try:
@@ -307,7 +308,8 @@ class ProductCreateView(APIView):
                 category=data['category'],
                 color=data['color'],
                 size=data['size'],
-                owner=request.user  # Set the owner to the current user
+                owner=request.user , # Set the owner to the current user
+                image=image
             )
 
             print(f"Product created successfully with owner: {product.owner.username}")
@@ -324,6 +326,7 @@ class ProductCreateView(APIView):
                     "size": product.size,
                     "created_at": product.created_at,
                     "updated_at": product.updated_at,
+                    "image_url": product.image.url if product.image else None 
                     
                 }
             }, status=status.HTTP_201_CREATED)
@@ -368,7 +371,46 @@ class ProductListView(APIView):
             logger.error(f"Error retrieving products: {str(e)}")
             return Response({"error": "Failed to retrieve products."}, status=status.HTTP_400_BAD_REQUEST)
         
+class PublicProductListView(APIView):
+    """
+    This view is used to fetch all products publicly for the homepage.
+    No authentication required.
+    """
+
+    def get(self, request):
+        try:
+            # Fetch all products (no filtering by user)
+            products = Product.objects.all()
+
+            # If no products found, return a message
+            if not products:
+                return Response({"message": "No products found."}, status=status.HTTP_404_NOT_FOUND)
+
+            # Manually construct the response data (without serializers)
+            product_data = []
+            for product in products:
+                product_data.append({
+                    "id": product.id,
+                    "name": product.name,
+                    "description": product.description,
+                    "price": product.price,
+                    "brand": product.brand,
+                    "category": product.category,
+                    "color": product.color,
+                    "size": product.size,
+                    "created_at": product.created_at,
+                    "updated_at": product.updated_at,
+                    "image_url": product.image.url if product.image else None,  # Assuming the model has an image field
+                })
+
+            return Response({"products": product_data}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error retrieving products: {str(e)}")
+            return Response({"error": "Failed to retrieve products."}, status=status.HTTP_400_BAD_REQUEST)
+        
 class AddToCartView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
