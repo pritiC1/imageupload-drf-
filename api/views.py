@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.core.mail import send_mail
 from django.conf import settings
+from django.core.files.storage import default_storage
 import random
 from rest_framework_simplejwt.tokens import RefreshToken
 from .models import CustomUser, OTP
@@ -28,6 +29,7 @@ from .models import OTP, CustomUser
 from .models import Cart
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.permissions import BasePermission
+from django.core.exceptions import ValidationError
 
 class IsSuperuser(BasePermission):
     """
@@ -232,10 +234,6 @@ class ProductView(APIView):
                 "name": product.name,
                 "description": product.description,
                 "price": product.price,
-                "brand": product.brand,
-                "category": product.category,
-                "color": product.color,
-                "size": product.size,
                 "image_url": request.build_absolute_uri(product.image.url) if product.image else None,
                
             }
@@ -256,13 +254,16 @@ class ProductView(APIView):
 
     def post(self, request):
         data = request.data
+        image = request.FILES.get("image")
+
         product = Product.objects.create(
             name=data.get("name"),
             description=data.get("description"),
             price=data.get("price"),
+            image=image 
             
         )
-        return Response({"id": product.id, "message": "Product created successfully!"}, status=status.HTTP_201_CREATED)
+        return Response({"id": product.id, "message": "Product created successfully!","image_url": product.image.url }, status=status.HTTP_201_CREATED)
 
     def put(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
@@ -270,11 +271,16 @@ class ProductView(APIView):
         product.name = data.get("name", product.name)
         product.description = data.get("description", product.description)
         product.price = data.get("price", product.price)
-        if'image' in request.FILES:
-            product.image = request.FILES['image']
+        image = request.FILES.get("image")
+        if image:
+            image_path = f"products/{image.name}"
+            default_storage.save(image_path, image)
+            product.image = image_path
 
         product.save()
         return Response({"message": "Product updated successfully!"}, status=status.HTTP_200_OK)
+    
+
     def delete(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
         product.delete()
@@ -282,28 +288,73 @@ class ProductView(APIView):
 
 
 class ProductCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsSuperuser]  # Ensure user is authenticated
+    permission_classes = [IsAuthenticated]  # Ensure user is authenticated
 
     def post(self, request, *args, **kwargs):
-        # Get data and image from request
         data = request.data
+        
+        # Extract product data
+        product_name = data.get('name')
+        description = data.get('description')
+        price = data.get('price')
+        image = request.FILES.get('image')
+
+        # Validate required fields
+        if not product_name or not description or not price:
+            return JsonResponse({'error': 'Missing required fields.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate price
         try:
-            # Handle file upload using request.FILES
-            image = request.FILES.get('image', None)  # 'image' should be the field name in the form
+            price = float(price)
+            if price <= 0:
+                return JsonResponse({'error': 'Price must be a positive number.'}, status=status.HTTP_400_BAD_REQUEST)
+        except ValueError:
+            return JsonResponse({'error': 'Invalid price format.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Create the product instance with the uploaded image
+        # Handle the image file
+        image_path = None
+        if image:
+            allowed_types = ['image/jpeg', 'image/png', 'image/gif']
+            max_size = 5 * 1024 * 1024  # 5MB
+
+            # Validate image type
+            if image.content_type not in allowed_types:
+                return JsonResponse({"error": "Invalid image type. Allowed types: JPEG, PNG, GIF."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Validate image size
+            if image.size > max_size:
+                return JsonResponse({"error": "Image size exceeds 5MB."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Save the image file
+            try:
+                image_path = f"products/{image.name}"
+                full_path = default_storage.save(image_path, ContentFile(image.read()))
+            except Exception as e:
+                return JsonResponse({'error': f'Error saving image: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Save product to the database
+        try:
             product = Product.objects.create(
-                name=data['name'],
-                description=data['description'],
-                price=data['price'],
-                image=image  # Save the image to the model
+                name=product_name,
+                description=description,
+                price=price,
+                image=image_path  # Save the relative path
             )
+        except ValidationError as e:
+            return JsonResponse({'error': f'Error creating product: {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
 
-            return Response({"message": "Product uploaded successfully!"}, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            logger.error(f"Error creating product: {str(e)}")
-            return Response({"error": "Failed to upload product."}, status=status.HTTP_400_BAD_REQUEST)
-
+        # Return response with the product details
+        image_url = request.build_absolute_url(f'{settings.MEDIA_URL}{image_path}') if image_path else None
+        return JsonResponse({
+            'message': 'Product added successfully!',
+            'product': {
+                'id': product.id,
+                'name': product.name,
+                'description': product.description,
+                'price': product.price,
+                'image': image_url
+            }
+        }, status=status.HTTP_201_CREATED)
 
 class ProductListView(APIView):
     permission_classes = [IsAuthenticated]  # Ensure the user is authenticated
@@ -317,33 +368,32 @@ class ProductListView(APIView):
             if not products:
                 return Response({"message": "No products found."}, status=status.HTTP_404_NOT_FOUND)
 
+            # Initialize paginator
+            paginator = PageNumberPagination()
+            paginator.page_size = 10  # Number of products per page
+
+            # Paginate the products
+            paginated_products = paginator.paginate_queryset(products, request)
+
             # Manually construct the response data (without serializers)
             product_data = []
-            for product in products:
+            for product in paginated_products:
                 # Construct the image URL
                 if product.image:
-                    image_url = request.build_absolute_uri(product.image.url)  # Full URL for the image
+                    image_url = request.build_absolute_uri(f"{settings.MEDIA_URL}{product.image.name}")  # Full URL for the image
                 else:
                     image_url = None
 
-
-            paginator = PageNumberPagination()
-            paginator.page_size = 10  # Number of products per page
-            paginated_products = paginator.paginate_queryset(products, request)
-
-
-            product_data = [
-                {
+                product_data.append({
                     "id": product.id,
                     "name": product.name,
                     "description": product.description,
                     "price": product.price,
                     "created_at": product.created_at,
                     "updated_at": product.updated_at,
-                    "image_url": image_url, 
-                }
-                for product in paginated_products
-            ]
+                    "image_url": image_url,  # Include the image URL
+                    "like_count": product.like_count,
+                })
 
             # Include pagination information
             return Response({
@@ -353,59 +403,6 @@ class ProductListView(APIView):
                 "previous": paginator.get_previous_link(),  # Link to the previous page
                 "products": product_data                 # Paginated products
             }, status=status.HTTP_200_OK)
-
-        except Exception as e:
-            logger.error(f"Error retrieving products: {str(e)}")
-            return Response({"error": "Failed to retrieve products."}, status=status.HTTP_400_BAD_REQUEST)
-        
-
-
-
-class PublicProductListView(APIView):
-    """
-    This view is used to fetch all products publicly for the homepage.
-    No authentication required.
-    """
-
-    def get(self, request):
-        try:
-            # Fetch all products (no filtering by user)
-            products = Product.objects.all()
-
-            # If no products found, return a message
-            if not products:
-                return Response({"message": "No products found."}, status=status.HTTP_404_NOT_FOUND)
-            
-
-            if product.image and product.image.startswith('http'):
-                image_url = product.image  # Online image URL
-            elif product.image:
-                    # Local image path; construct full URL
-                image_url = request.build_absolute_uri(product.image)
-            else:
-                image_url = None  # No imag
-
-
-            paginator = PageNumberPagination()
-            paginator.page_size = 10  # Number of products per page
-            paginated_products = paginator.paginate_queryset(products, request)
-
-
-            # Manually construct the response data (without serializers)
-            product_data = [
-                {
-                    "id": product.id,
-                    "name": product.name,
-                    "description": product.description,
-                    "price": product.price,
-                    "created_at": product.created_at,
-                    "updated_at": product.updated_at,
-                    "image_url": request.build_absolute_uri(product.image.url) if product.image else None,
-                }
-                for product in paginated_products
-            ]
-
-            return paginator.get_paginated_response(product_data)
 
         except Exception as e:
             logger.error(f"Error retrieving products: {str(e)}")
